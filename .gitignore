@@ -1,3 +1,4 @@
-.bachelor
+.venv
 .ipynb_checkpoints
 .DS_Store
+run.sh
