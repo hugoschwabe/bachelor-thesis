@@ -122,29 +122,38 @@ def build_results_graph(original:nx.Graph, results:list[frozenset]) -> tuple[nx.
         index += [i] * len(results[i]) 
     df = pd.DataFrame({"index": index, "nodes": nodes})
     df = df.merge(graph_to_nodes_df(original), how="left", on="nodes")
+    df["x"] = df["coord"].map(lambda x: x[0])
+    df["y"] = df["coord"].map(lambda x: x[1])
+    #print(df.head(10))
 
     edges_converter = pd.DataFrame(np.array(original.edges), columns=["nodes_left", "nodes_right"])
     edges_converter = edges_converter.merge(df.rename(columns={"nodes":"nodes_left", "index":"index_left"}), on="nodes_left", how="left")
     edges_converter = edges_converter.merge(df.rename(columns={"nodes":"nodes_right", "index":"index_right"}), on="nodes_right", how="left")
     edges_converter = edges_converter[["index_left", "index_right"]].drop_duplicates()
     edges_converter = edges_converter[edges_converter["index_left"] != edges_converter["index_right"]]
-
+    edges_converter = list(edges_converter[["index_left", "index_right"]].itertuples(index=False, name=None))
+    #print(edges_converter)
+    
     nodes_simpliefied = df.groupby("index").agg({"x":"mean", "y":"mean"})
-    nodes_simpliefied.head(10)
-
-    simplified_pos = {i: (nodes_simpliefied.iloc[i].x, nodes_simpliefied.iloc[i].y) for i in range(nodes_simpliefied["x"].size)}
+    #print(nodes_simpliefied.T.to_dict())
 
     simplified = nx.Graph()
-    simplified.add_nodes_from(list(nodes_simpliefied.index))
-    simplified.add_edges_from(edges_converter.to_numpy())
+    simplified.add_nodes_from(nodes_simpliefied.T.to_dict().items())
+    simplified.add_edges_from(list(edges_converter))
 
-    return simplified, simplified_pos
+    return simplified
 
-def plot_network(graph:nx.Graph, pos:dict[float, float], clusters:list=None, node_size:int=20, title:str="Title"):
+def plot_network(graph:nx.Graph, clusters:list=None, node_size:int=20, title:str="Title"):
     """
     Plot any NetworkX graph with correct position for nodes
     """
     plt.figure(figsize=(8, 10))
+
+    try:
+        pos = {node: (data["coord"][0], data["coord"][1]) for node, data in graph.nodes(data=True)}
+    except:
+        pos = {node: (data["x"], data["y"]) for node, data in graph.nodes(data=True)}
+    #print(pos)
 
     colors = [
         'red', 'blue', 'green', 'orange', 'purple',
@@ -152,18 +161,17 @@ def plot_network(graph:nx.Graph, pos:dict[float, float], clusters:list=None, nod
         'teal', 'gold', 'navy', 'brown', 'olive'
     ]
     if clusters is None:
-        clusters = []
-        for elem in list(graph.nodes):
-            clusters += [[elem]]
+        clusters = np.array(graph.nodes).reshape(-1, 1)
+    #print(clusters)
 
     for i, res in enumerate(clusters):
         nx.draw_networkx_nodes(graph, pos, 
                             nodelist=res, 
                             node_size=node_size, 
-                            node_color=colors[i % len(colors)]
+                            node_color=colors[i % len(colors)],
         )
 
-    nx.draw_networkx_edges(graph, pos, alpha=1)
+    nx.draw_networkx_edges(graph, pos, alpha=1, arrows=False)
 
     plt.title(title)
     plt.show()
