@@ -6,7 +6,7 @@ import networkx as nx
 from networkx.algorithms.community.quality import modularity
 import numpy as np
 
-def complexity(original:nx.Graph, simplified:nx.Graph):
+def complexity(original:nx.Graph, simplified:nx.Graph, verbose:bool=False):
     """
     Calculate and return the complexity part of the scoring function
     """
@@ -19,7 +19,12 @@ def complexity(original:nx.Graph, simplified:nx.Graph):
     # calculate average degree score
     original_avg_degree = sum([x[1] for x in nx.degree(original)]) / len(nx.degree(original))
     simplified_avg_degree = sum([x[1] for x in nx.degree(simplified)]) / len(nx.degree(simplified))
-    avg_degree_score = simplified_avg_degree / original_avg_degree
+    avg_degree_score = simplified_avg_degree / original_avg_degree if simplified_avg_degree < original_avg_degree else 1
+
+    if verbose:
+        print(f"nodes_score: {nodes_score}")
+        print(f"edges_score: {edges_score}")
+        print(f"avg_degree_score: {avg_degree_score}")
 
     # average the three complexity scores and return result
     return 1 - ((nodes_score + edges_score + avg_degree_score) / 3)
@@ -31,11 +36,10 @@ def structure():
     """
     return 0
 
-def count_regions(df:pd.DataFrame, regions:gpd.GeoDataFrame):
-    
-    # create dataframe from nodes["id"], nodes["x"], nodes["y"]
-    df = gpd.GeoDataFrame(df["id"].copy())
-    df = df.set_geometry(gpd.points_from_xy(regions["x"], regions["y"]), crs="EPSG:3035").to_crs("EPSG:4326")
+def count_regions(G:nx.Graph, regions:gpd.GeoDataFrame):
+    # create geodataframe from nodes
+    df = gpd.GeoDataFrame(graph_to_nodes_df(G))
+    df = df.set_geometry(gpd.points_from_xy(df["x"], df["y"]), crs="EPSG:3035").to_crs("EPSG:4326")
 
     # merge nuts regions file with id-point dataframe
     df = df.sjoin(regions, how="left", predicate='within')
@@ -49,46 +53,59 @@ def count_regions(df:pd.DataFrame, regions:gpd.GeoDataFrame):
     # count number of lines
     return df.size
 
-def regionality(original:nx.Graph, simplified:nx.Graph, regions:gpd.GeoDataFrame):
+def regionality(original:nx.Graph, simplified:nx.Graph, regions:gpd.GeoDataFrame, verbose:bool=False):
     """
     Calculate and return the regionality part of the scoring function
     """
-    # calculate score from difference in number of regions
-    return count_regions(simplified) / count_regions(original)
+    if verbose:
+        print(f"original regions: {count_regions(original, regions)}")
+        print(f"simplified regions: {count_regions(simplified, regions)}")
 
-#compare to pre-processed
-def properties(original:nx.Graph, simplified:nx.Graph):
+    # calculate score from difference in number of regions
+    return count_regions(simplified, regions) / count_regions(original, regions)
+
+def properties(original:nx.Graph, simplified:nx.Graph, verbose:bool=False):
     """
     Calculate and return the properties part of the scoring function
     """
-    # calculate properties score from 
-    return properties_df(simplified) / properties_df(original)
+    if verbose:
+        print(f"original properties: {properties_df(graph_node_names(original))}")
+        print(f"simplified properties: {properties_df(graph_node_names(simplified))}")
+    return properties_df(graph_node_names(simplified)) / properties_df(graph_node_names(original))
     
-def properties_df(df:pd.DataFrame):
-    # count how often each unique element occurs  
-    count = df["type"].value_counts().reset_index()
-    # count node types, apply weights, add weighted count
+def properties_df(l:list):
     score = 0
-    for i in range(0, count.shape[1]):
-        match count["type"].iloc[i]:
-            case "DSO": score += count["count"].iloc[i]
-            case "IND": score += count["count"].iloc[i]
-            case "TPP": score += count["count"].iloc[i]*0.75
-            case "BIO": score += count["count"].iloc[i]*0.25
-            case "GPR": score += count["count"].iloc[i]*0.25
-            case "GS": score += count["count"].iloc[i]
-            case "FUEL": score += count["count"].iloc[i]*0
-            case "LNG": score += count["count"].iloc[i]*0.25
-            case "IC": score += count["count"].iloc[i]
-            case "UGS": score += count["count"].iloc[i]*0.75
-            case "N": score += count["count"].iloc[i]*0.5
+    for elem in l:
+        if "DSO" in elem: score += 1
+        if "IND" in elem: score += 1
+        if "TPP" in elem: score += 0.75
+        if "BIO" in elem: score += 0.25
+        if "GPR" in elem: score += 0.25
+        if "CS" in elem: score += 1
+        if "CV" in elem: score += 0
+        if "LNG" in elem: score += 0.25
+        if "IC" in elem: score += 1
+        if "ST" in elem: score += 0.75
+        if "X" in elem: score += 0.5
     return score
 
-def score(original:nx.Graph, simplified:nx.Graph, regions:nx.Graph):
+def score(original:nx.Graph, simplified:nx.Graph, regions:nx.Graph, verbose:bool=False):
     """
     Scoring function assessing the quality of the gas network simplification 
     """
+    if verbose:
+        print(f"complexity: {complexity(original, simplified, verbose=True)}\n")
+        print(f"structure: {structure()}\n")
+        print(f"regionality: {regionality(original, simplified, regions, verbose=True)}\n")
+        print(f"properties: {properties(original, simplified, verbose=True)}\n")
     return (3 * complexity(original, simplified) + structure() + regionality(original, simplified, regions) + properties(original, simplified)) / 6
+
+def graph_node_names(G:nx.Graph):
+    nodes = graph_to_nodes_df(G)["nodes"]
+    if type(nodes[0]) == str:
+        return nodes.to_list()
+    else:	
+        return [item for sublist in nodes for item in sublist]
 
 def graph_to_nodes_df(G:nx.Graph):
     """
@@ -103,39 +120,42 @@ def run_algo(original:nx.Graph, func) -> list[frozenset]:
     #results = greedy_modularity_communities(graph)
     results = func(original)
 
-    # Ergebnisse anzeigen
+    # Show results
     print("Gefundene Communities: " + str(len(results)))
 
-    # Modularität berechnen
+    # Calculate modularity
     mod_value = modularity(original, results)
     print(f"Modularität Q = {mod_value}")
     return results
 
+# Mistake: Directions are not taken into account
 def build_results_graph(original:nx.Graph, results:list[frozenset]) -> tuple[nx.Graph, tuple[float, float]]:
     """
     Build the graph from simplification results list
     """
-    index = []
     nodes = []
+    group = []
     for i in range(len(results)):
         nodes += list(results[i])
-        index += [i] * len(results[i]) 
-    df = pd.DataFrame({"index": index, "nodes": nodes})
+        group += [i] * len(results[i]) 
+    df = pd.DataFrame({"group": group, "nodes": nodes})
     df = df.merge(graph_to_nodes_df(original), how="left", on="nodes")
     df["x"] = df["coord"].map(lambda x: x[0])
     df["y"] = df["coord"].map(lambda x: x[1])
     #print(df.head(10))
 
     edges_converter = pd.DataFrame(np.array(original.edges), columns=["nodes_left", "nodes_right"])
-    edges_converter = edges_converter.merge(df.rename(columns={"nodes":"nodes_left", "index":"index_left"}), on="nodes_left", how="left")
-    edges_converter = edges_converter.merge(df.rename(columns={"nodes":"nodes_right", "index":"index_right"}), on="nodes_right", how="left")
+    edges_converter = edges_converter.merge(df.rename(columns={"nodes":"nodes_left", "group":"index_left"}), on="nodes_left", how="left")
+    edges_converter = edges_converter.merge(df.rename(columns={"nodes":"nodes_right", "group":"index_right"}), on="nodes_right", how="left")
     edges_converter = edges_converter[["index_left", "index_right"]].drop_duplicates()
     edges_converter = edges_converter[edges_converter["index_left"] != edges_converter["index_right"]]
     edges_converter = list(edges_converter[["index_left", "index_right"]].itertuples(index=False, name=None))
     #print(edges_converter)
     
-    nodes_simpliefied = df.groupby("index").agg({"x":"mean", "y":"mean"})
-    #print(nodes_simpliefied.T.to_dict())
+    nodes_simpliefied = df.groupby("group")
+    nodes_simpliefied = nodes_simpliefied.agg({"x":"mean", "y":"mean", "nodes": list, "node_type": set})
+    nodes_simpliefied = nodes_simpliefied.rename(columns={"nodes":"index"})
+    #print(nodes_simpliefied)
 
     simplified = nx.Graph()
     simplified.add_nodes_from(nodes_simpliefied.T.to_dict().items())
@@ -143,35 +163,59 @@ def build_results_graph(original:nx.Graph, results:list[frozenset]) -> tuple[nx.
 
     return simplified
 
-def plot_network(graph:nx.Graph, clusters:list=None, node_size:int=20, title:str="Title"):
+def plot_network(graph:nx.Graph, gdf:gpd.GeoDataFrame, clusters:list=None, node_size:int=20, title:str="Title", padding_ratio:float=0.15):
     """
-    Plot any NetworkX graph with correct position for nodes
+    Plot any NetworkX graph with optional NUTS regions background from a GeoDataFrame.
     """
-    plt.figure(figsize=(8, 10))
+    fig, ax = plt.subplots(figsize=(8, 10))  # Use explicit axis
 
+    # Plot GeoDataFrame (e.g. NUTS background)
+    if gdf is not None:
+        gdf.plot(ax=ax, color='lightgrey', edgecolor='black', alpha=0.5, zorder=0)
+
+    # Get node positions
     try:
         pos = {node: (data["coord"][0], data["coord"][1]) for node, data in graph.nodes(data=True)}
     except:
         pos = {node: (data["x"], data["y"]) for node, data in graph.nodes(data=True)}
-    #print(pos)
 
+    # Color palette
     colors = [
         'red', 'blue', 'green', 'orange', 'purple',
         'cyan', 'magenta', 'yellow', 'lime', 'pink',
         'teal', 'gold', 'navy', 'brown', 'olive'
     ]
+
+    # Handle clusters
     if clusters is None:
         clusters = np.array(graph.nodes).reshape(-1, 1)
-    #print(clusters)
-
+    
+    # Draw nodes
     for i, res in enumerate(clusters):
-        nx.draw_networkx_nodes(graph, pos, 
-                            nodelist=res, 
-                            node_size=node_size, 
-                            node_color=colors[i % len(colors)],
+        nx.draw_networkx_nodes(
+            graph, pos,
+            nodelist=res,
+            node_size=node_size,
+            node_color=colors[i % len(colors)],
+            ax=ax,
         )
 
-    nx.draw_networkx_edges(graph, pos, alpha=1, arrows=False)
+    # Draw edges
+    nx.draw_networkx_edges(graph, pos, alpha=1, arrows=False, ax=ax)
+    
+    # Set axis extent from node coordinates with padding
+    x_vals = [coord[0] for coord in pos.values()]
+    y_vals = [coord[1] for coord in pos.values()]
+    x_min, x_max = min(x_vals), max(x_vals)
+    y_min, y_max = min(y_vals), max(y_vals)
 
-    plt.title(title)
+    x_pad = (x_max - x_min) * padding_ratio
+    y_pad = (y_max - y_min) * padding_ratio
+
+    ax.set_xlim(x_min - x_pad, x_max + x_pad)
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
+
+    ax.set_title(title)
+    ax.set_axis_on()  
+    plt.tight_layout()
     plt.show()
