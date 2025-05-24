@@ -6,6 +6,7 @@ import networkx as nx
 from networkx.algorithms.community.quality import modularity
 import numpy as np
 
+# What happens when avg_deg of simplified is higher than original?
 def complexity(original:nx.Graph, simplified:nx.Graph, verbose:bool=False):
     """
     Calculate and return the complexity part of the scoring function
@@ -19,7 +20,7 @@ def complexity(original:nx.Graph, simplified:nx.Graph, verbose:bool=False):
     # calculate average degree score
     original_avg_degree = sum([x[1] for x in nx.degree(original)]) / len(nx.degree(original))
     simplified_avg_degree = sum([x[1] for x in nx.degree(simplified)]) / len(nx.degree(simplified))
-    avg_degree_score = simplified_avg_degree / original_avg_degree if simplified_avg_degree < original_avg_degree else 1
+    avg_degree_score = simplified_avg_degree / original_avg_degree
 
     if verbose:
         print(f"nodes_score: {nodes_score}")
@@ -98,7 +99,7 @@ def score(original:nx.Graph, simplified:nx.Graph, regions:nx.Graph, verbose:bool
         print(f"structure: {structure()}\n")
         print(f"regionality: {regionality(original, simplified, regions, verbose=True)}\n")
         print(f"properties: {properties(original, simplified, verbose=True)}\n")
-    return (3 * complexity(original, simplified) + structure() + regionality(original, simplified, regions) + properties(original, simplified)) / 6
+    return (complexity(original, simplified) + structure() + regionality(original, simplified, regions) + properties(original, simplified)) / 4
 
 def graph_node_names(G:nx.Graph):
     nodes = graph_to_nodes_df(G)["nodes"]
@@ -163,7 +164,7 @@ def build_results_graph(original:nx.Graph, results:list[frozenset]) -> tuple[nx.
 
     return simplified
 
-def plot_network(graph:nx.Graph, gdf:gpd.GeoDataFrame, clusters:list=None, node_size:int=20, title:str="Title", padding_ratio:float=0.15):
+def plot_network(graph:nx.Graph, gdf:gpd.GeoDataFrame=None, clusters:list=None, node_size:int=20, title:str="Title", padding_ratio:float=0.15, nodes:bool=True, edges:bool=True):
     """
     Plot any NetworkX graph with optional NUTS regions background from a GeoDataFrame.
     """
@@ -171,7 +172,7 @@ def plot_network(graph:nx.Graph, gdf:gpd.GeoDataFrame, clusters:list=None, node_
 
     # Plot GeoDataFrame (e.g. NUTS background)
     if gdf is not None:
-        gdf.plot(ax=ax, color='lightgrey', edgecolor='black', alpha=0.5, zorder=0)
+        gdf.plot(ax=ax, color='lightgrey', edgecolor='white', alpha=0.5, linewidth=2, zorder=0)
 
     # Get node positions
     try:
@@ -179,29 +180,32 @@ def plot_network(graph:nx.Graph, gdf:gpd.GeoDataFrame, clusters:list=None, node_
     except:
         pos = {node: (data["x"], data["y"]) for node, data in graph.nodes(data=True)}
 
-    # Color palette
-    colors = [
-        'red', 'blue', 'green', 'orange', 'purple',
-        'cyan', 'magenta', 'yellow', 'lime', 'pink',
-        'teal', 'gold', 'navy', 'brown', 'olive'
-    ]
+    if nodes:
+        # Color palette
+        colors = [
+            'red', 'blue', 'green', 'orange', 'purple',
+            'cyan', 'magenta', 'yellow', 'lime', 'pink',
+            'teal', 'gold', 'navy', 'brown', 'olive'
+        ]
 
-    # Handle clusters
-    if clusters is None:
-        clusters = np.array(graph.nodes).reshape(-1, 1)
-    
-    # Draw nodes
-    for i, res in enumerate(clusters):
-        nx.draw_networkx_nodes(
-            graph, pos,
-            nodelist=res,
-            node_size=node_size,
-            node_color=colors[i % len(colors)],
-            ax=ax,
-        )
+        # Handle clusters
+        if clusters is None:
+            clusters = np.array(graph.nodes).reshape(-1, 1)
+        
+        # Draw nodes
+        
+        for i, res in enumerate(clusters):
+            nx.draw_networkx_nodes(
+                graph, pos,
+                nodelist=res,
+                node_size=node_size,
+                node_color=colors[i % len(colors)],
+                ax=ax
+            )
 
-    # Draw edges
-    nx.draw_networkx_edges(graph, pos, alpha=1, arrows=False, ax=ax)
+    if edges:
+        # Draw edges
+        nx.draw_networkx_edges(graph, pos, alpha=1, arrows=False, ax=ax)
     
     # Set axis extent from node coordinates with padding
     x_vals = [coord[0] for coord in pos.values()]
