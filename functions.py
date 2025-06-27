@@ -17,24 +17,31 @@ def complexity(original:nx.Graph, simplified:nx.Graph, verbose:bool=False):
     # calculate edge count score
     edges_score = simplified.number_of_edges() / original.number_of_edges()
     
-    # calculate average degree score
-    original_avg_degree = sum([x[1] for x in nx.degree(original)]) / len(nx.degree(original))
-    simplified_avg_degree = sum([x[1] for x in nx.degree(simplified)]) / len(nx.degree(simplified))
-    avg_degree_score = simplified_avg_degree / original_avg_degree
+    # calculate cyclomatic number
+    pre_cyclo = original.number_of_edges() - original.number_of_nodes() + nx.number_connected_components(original)
+    post_cyclo = simplified.number_of_edges() - simplified.number_of_nodes() + nx.number_connected_components(simplified)
+    cyclo = post_cyclo / pre_cyclo
 
     if verbose:
         print(f"nodes_score: {nodes_score}")
         print(f"edges_score: {edges_score}")
-        print(f"avg_degree_score: {avg_degree_score}")
+        print("pre-simplification cyclomatic number:", pre_cyclo)
+        print("post-simplification Cyclomatic number:", post_cyclo)
+        print("cyclomatic score:", cyclo)
 
     # average the three complexity scores and return result
-    return 1 - ((nodes_score + edges_score + avg_degree_score) / 3)
+    return 1 - ((nodes_score + edges_score + cyclo) / 3)
 
-#Structure
 def structure():
     """
     Calculate and return the structure part of the scoring function
     """
+    # Algebraic Connectivity: The second-smallest eigenvalue
+
+    # Distribution of Betweenness Centrality: Earth Mover's Distance (EMD) or the Kolmogorov-Smirnov
+
+    # Spectral Distance: Capturing global structural changes
+
     return 0
 
 def count_regions(G:nx.Graph, regions:gpd.GeoDataFrame):
