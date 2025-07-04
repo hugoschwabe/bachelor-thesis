@@ -5,46 +5,98 @@ import pandas as pd
 import networkx as nx
 from networkx.algorithms.community.quality import modularity
 import numpy as np
+from scipy.stats import wasserstein_distance
 
 # What happens when avg_deg of simplified is higher than original?
-def complexity(original:nx.Graph, simplified:nx.Graph, verbose:bool=False):
+def complexity(original:nx.Graph, simplified:nx.Graph, verbose:bool=False) -> float:
     """
     Calculate and return the complexity part of the scoring function
     """
     # calculate node count score
-    nodes_score = simplified.number_of_nodes() / original.number_of_nodes()
+    nodes_score = 1 - (simplified.number_of_nodes() / original.number_of_nodes())
     
     # calculate edge count score
-    edges_score = simplified.number_of_edges() / original.number_of_edges()
+    edges_score = 1 - (simplified.number_of_edges() / original.number_of_edges())
     
     # calculate cyclomatic number
     pre_cyclo = original.number_of_edges() - original.number_of_nodes() + nx.number_connected_components(original)
     post_cyclo = simplified.number_of_edges() - simplified.number_of_nodes() + nx.number_connected_components(simplified)
-    cyclo = post_cyclo / pre_cyclo
+    cyclo_score = 1 - (post_cyclo / pre_cyclo)
+
+    # calculating score
+    complexity_score = (nodes_score + edges_score + cyclo_score) / 3
 
     if verbose:
         print(f"nodes_score: {nodes_score}")
         print(f"edges_score: {edges_score}")
-        print("pre-simplification cyclomatic number:", pre_cyclo)
-        print("post-simplification Cyclomatic number:", post_cyclo)
-        print("cyclomatic score:", cyclo)
+        print(f"pre_cyclo: {pre_cyclo}")
+        print(f"post_cyclo: {post_cyclo}")
+        print(f"cyclomatic_score: {cyclo_score}")
+        print(f"complexity_score: {complexity_score}\n")
 
     # average the three complexity scores and return result
-    return 1 - ((nodes_score + edges_score + cyclo) / 3)
+    return complexity_score
 
-def structure():
+def structure(original:nx.Graph, simplified:nx.Graph, verbose:bool=False) -> float:
     """
     Calculate and return the structure part of the scoring function
     """
     # Algebraic Connectivity: The second-smallest eigenvalue
+    ac_simplified = nx.linalg.algebraic_connectivity(simplified)
+    ac_original = nx.linalg.algebraic_connectivity(original)
+    # Symmetric Difference for score calculation, taking into account increases and decreases after simplification
+    ac_score = 1 - (abs(ac_simplified - ac_original) / ac_simplified + ac_original)
 
-    # Distribution of Betweenness Centrality: Earth Mover's Distance (EMD) or the Kolmogorov-Smirnov
+    # Distribution of Betweenness Centrality: Earth Mover's Distance (EMD)
+    centrality_before = nx.betweenness_centrality(original)
+    centrality_after_raw = nx.betweenness_centrality(simplified)
+    # centrality dictionary for the 'after' case, including nodes that were removed (their centrality is now 0).
+    centrality_after = {node: centrality_after_raw.get(node, 0.0) for node in original.nodes()}
+    dist_before = np.array([centrality_before[node] for node in original.nodes()])
+    print(dist_before)
+    dist_after = np.array([centrality_after[node] for node in original.nodes()])
+    print(dist_after)
+    emd_score = wasserstein_distance(dist_before, dist_after)
 
     # Spectral Distance: Capturing global structural changes
+    nodelist = list(original.nodes())
+    # Get the Laplacian matrices as dense NumPy arrays
+    laplacian_before = nx.laplacian_matrix(original, nodelist=nodelist).toarray()
+    laplacian_after = np.zeros_like(laplacian_before)
+    nodes_in_after = [node for node in nodelist if node in simplified]
+    if nodes_in_after:
+        # Calculate the smaller Laplacian for only the nodes that still exist
+        sub_laplacian = nx.laplacian_matrix(simplified, nodelist=nodes_in_after).toarray()
+        # Create a mapping from node name to its index in the original full nodelist
+        node_to_idx = {node: i for i, node in enumerate(nodelist)}
+        # Get the indices where the sub-matrix should be placed
+        after_indices = [node_to_idx[node] for node in nodes_in_after]
+        # Use NumPy's advanced indexing to place the smaller sub_laplacian
+        # into the correct locations within the full-sized zero matrix.
+        laplacian_after[np.ix_(after_indices, after_indices)] = sub_laplacian
+    # Calculate the raw spectral distance (Frobenius norm of the difference)
+    dist_raw = np.linalg.norm(laplacian_before - laplacian_after, 'fro')
+    print(dist_raw)
+    # Calculate the maximum possible distance (norm of the original Laplacian)
+    dist_max = np.linalg.norm(laplacian_before, 'fro')
+    print(dist_max)
+    # Normalize the score
+    spectral_score = 1.0 - (dist_raw / dist_max)
 
-    return 0
+    # calculating score
+    structure_score = (ac_score + emd_score + spectral_score) / 3
 
-def count_regions(G:nx.Graph, regions:gpd.GeoDataFrame):
+    if verbose:
+        print(f"ac_simplified: {ac_simplified}")
+        print(f"ac_original: {ac_original}")
+        print(f"ac_score: {ac_score}")
+        print(f"emd_score: {emd_score}")
+        print(f"spectral_dist_score: {spectral_score}")
+        print(f"structure_score: {structure_score}\n")
+
+    return structure_score
+
+def count_regions(G:nx.Graph, regions:gpd.GeoDataFrame) -> int:
     # create geodataframe from nodes
     df = gpd.GeoDataFrame(graph_to_nodes_df(G))
     df = df.set_geometry(gpd.points_from_xy(df["x"], df["y"]), crs="EPSG:3035").to_crs("EPSG:4326")
@@ -61,27 +113,37 @@ def count_regions(G:nx.Graph, regions:gpd.GeoDataFrame):
     # count number of lines
     return df.size
 
-def regionality(original:nx.Graph, simplified:nx.Graph, regions:gpd.GeoDataFrame, verbose:bool=False):
+def regionality(original:nx.Graph, simplified:nx.Graph, regions:gpd.GeoDataFrame, verbose:bool=False) -> float:
     """
     Calculate and return the regionality part of the scoring function
     """
+    original_regions = count_regions(original, regions)
+    simplified_regions = count_regions(simplified, regions)
+    regionality_score = simplified_regions / original_regions
+
     if verbose:
-        print(f"original regions: {count_regions(original, regions)}")
-        print(f"simplified regions: {count_regions(simplified, regions)}")
+        print(f"original_regions: {original_regions}")
+        print(f"simplified_regions: {simplified_regions}")
+        print(f"regionality_score: {regionality_score}\n")
 
-    # calculate score from difference in number of regions
-    return count_regions(simplified, regions) / count_regions(original, regions)
+    return regionality_score
 
-def properties(original:nx.Graph, simplified:nx.Graph, verbose:bool=False):
+def properties(original:nx.Graph, simplified:nx.Graph, verbose:bool=False) -> float:
     """
     Calculate and return the properties part of the scoring function
     """
+    original_properties = properties_df(graph_node_names(original))
+    simplified_properties = properties_df(graph_node_names(simplified))
+    properties_score = simplified_properties / original_properties
+
     if verbose:
-        print(f"original properties: {properties_df(graph_node_names(original))}")
-        print(f"simplified properties: {properties_df(graph_node_names(simplified))}")
-    return properties_df(graph_node_names(simplified)) / properties_df(graph_node_names(original))
+        print(f"original_properties: {original_properties}")
+        print(f"simplified_properties: {simplified_properties}")
+        print(f"properties_score: {properties_score}")
     
-def properties_df(l:list):
+    return properties_score
+    
+def properties_df(l:list) -> float:
     score = 0
     for elem in l:
         if "DSO" in elem: score += 1
@@ -97,25 +159,20 @@ def properties_df(l:list):
         if "X" in elem: score += 0.5
     return score
 
-def score(original:nx.Graph, simplified:nx.Graph, regions:nx.Graph, verbose:bool=False):
+def score(original:nx.Graph, simplified:nx.Graph, regions:nx.Graph, verbose:bool=False) -> float:
     """
     Scoring function assessing the quality of the gas network simplification 
     """
-    if verbose:
-        print(f"complexity: {complexity(original, simplified, verbose=True)}\n")
-        print(f"structure: {structure()}\n")
-        print(f"regionality: {regionality(original, simplified, regions, verbose=True)}\n")
-        print(f"properties: {properties(original, simplified, verbose=True)}\n")
-    return (complexity(original, simplified) + structure() + regionality(original, simplified, regions) + properties(original, simplified)) / 4
+    return (complexity(original, simplified, verbose) + structure(original, simplified, verbose) + regionality(original, simplified, regions, verbose) + properties(original, simplified, verbose)) / 4
 
-def graph_node_names(G:nx.Graph):
+def graph_node_names(G:nx.Graph) -> list[str]:
     nodes = graph_to_nodes_df(G)["nodes"]
     if type(nodes[0]) == str:
         return nodes.to_list()
     else:	
         return [item for sublist in nodes for item in sublist]
 
-def graph_to_nodes_df(G:nx.Graph):
+def graph_to_nodes_df(G:nx.Graph) -> pd.DataFrame:
     """
     Converts graph's nodes into a dataframe while preserving all attributes
     """
@@ -171,7 +228,7 @@ def build_results_graph(original:nx.Graph, results:list[frozenset]) -> tuple[nx.
 
     return simplified
 
-def plot_network(graph:nx.Graph, gdf:gpd.GeoDataFrame=None, clusters:list=None, node_size:int=20, title:str="Title", padding_ratio:float=0.15, nodes:bool=True, edges:bool=True):
+def plot_network(graph:nx.Graph, gdf:gpd.GeoDataFrame=None, clusters:list=None, node_size:int=20, title:str="Title", padding_ratio:float=0.15, nodes:bool=True, edges:bool=True) -> None:
     """
     Plot any NetworkX graph with optional NUTS regions background from a GeoDataFrame.
     """
